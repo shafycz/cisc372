@@ -10,9 +10,9 @@
 // The imagined pagerank-serial.h contains my (student) serial_mvpSM and possibly other reworked functions.
 //#include "pagerank-serial.h"
 // ...or I put it right here:
-void serial_mvpSM(double * w, SparseMatrix S, double * z, int startIdx, int endIdx) {
+void serial_mvpSM(double * w, SparseMatrix S, double * z) {
 	// this is a stub.  ..replace this with an improved serial matrix vector product.
-	strawman_mvpSM(w, S, z, startIdx, endIdx);
+	strawman_mvpSM(w, S, z);
 }
 /////////////////////////////////////////////////////////////
 
@@ -23,11 +23,10 @@ void uniform(double *x, int n) {
 	for (i = 0; i < n; ++i) x[i] = ninv;
 }
 
-// main tests strawman version against my new serial version.
 int main(int argc, char* argv[]){
 	// hello
 	int n = 100;
-	double d = 0.85; // damping variable
+	double d = 0.85; 
 	double eps = 0.000000001;
 	if (argc <= 1 || argc > 4) {
 		printf("usage: %s num-pages damping-factor(0.85) epsilon(0.0001)\n", argv[0]);
@@ -41,34 +40,45 @@ int main(int argc, char* argv[]){
 	double *y0  = (double *) malloc(n*sizeof(double)); // holds initial page probabilities
 	double *y  = (double *) malloc(n*sizeof(double)); // holds intermediate and ultimate probs.
 	uniform(y0, n);
-	printf("initial probabilities\n");
-	printvec(y0, n);
-
+	
+	MPI_Init(0,0);
+	
+	
+	int world_size;
+	MPI_Comm_size(MPI_COMM_WORLD, &world_size);//get number of processes
+	
+	int world_rank;
+	MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);//rank of the process
+	
+	if (world_rank==0) {	
+		printf("initial probabilities\n");
+		printvec(y0, n);
+	}
+	
 	// build matrix
 	struct SparseMatrixHandle SH;
 	SparseMatrix S = &SH;
 	randomLM(S, n); // The link matrix
 	if (n <= 100) writeSM(S, 50);
-	printf("dimension is %d, nnz is %d, damper is %f, epsilon is %g\n\n", S->coldim, S->nnz, d, eps);
-
+	if (world_rank==0) {
+		printf("dimension is %d, nnz is %d, damper is %f, epsilon is %g\n\n", S->coldim, S->nnz, d, eps);
+	}
 	double *C = (double *) malloc(S->coldim*sizeof(double));
 	scale(C, S); // convert link matrix to stochastic matrix (col sums are 1).
 
-	MPI_Init(0,0);
-	double start, elapsed, elapsed2;
-	int iters; 
-	// compute page rank
-	int size;
-	MPI_Comm_size(MPI_COMM_WORLD, &size);
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	double start, elapsed, local_elapsed;
+	int iters;
 
-	
 	start = MPI_Wtime();
-	iters = solve(S, C, d, y0, y, eps, strawman_mvpSM, size, rank);
-	elapsed = MPI_Wtime() - start;
-	printf("final (page rank) probabilities, %d iterations in time %f\n", iters, elapsed);
-	printvec(y, n); printf("\n");
+	iters = solve(S, C, d, y0, y, eps, strawman_mpi, world_rank, world_size);
+
+	local_elapsed = MPI_Wtime() - start;
+	MPI_Reduce(&local_elapsed, &elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+	if (world_rank==0) {	
+		printf("%f secs per iter, %d iters to return final page rank prob\n", iters, elapsed);
+		printvec(y, n); 
+		printf("\n");
+	}
 
 	// good bye
 	free(C); free(y); free(y0); free(SH.row); free(SH.col); free(SH.val);
